@@ -10,11 +10,16 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <TextBlock Text="{Binding}" FontSize="15" Margin="2" />
-                <Button Grid.Column="1" Content="Donate" Cursor="Hand" Click="DonateButton_Click"
+                <Button Grid.Column="1" Content="Donate API v2" Cursor="Hand" Click="DonateButton_Click"
+                        Tag="https://www.tinkoff.ru/cf/5vi33g3zO6O"
+                        ToolTip="Поблагодарить автора API v2 \ поддержать разработку можно тут"
+                        Padding="8 0" Margin="6 0" MinHeight="20" Height="20" />
+                <Button Grid.Column="2" Content="Donate original" Cursor="Hand" Click="DonateButton_Click"
                         Tag="https://www.tinkoff.ru/sl/7VEs87kS1aY"
-                        ToolTip="Поблагодарить автора \ поддержать разработку можно тут"
+                        ToolTip="Поблагодарить оригинального автора \ поддержать разработку можно тут"
                         Padding="8 0" Margin="6 0" MinHeight="20" Height="20" />
             </Grid>
         </DataTemplate>
