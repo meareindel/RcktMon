@@ -61,9 +61,9 @@ namespace CoreNgine.Shared
         private Task CommonConnectionQueueTask;
         private Task[] _responseProcessingTasks;
 
-        internal Connection CommonConnection { get; set; }
-        internal Connection CandleConnection { get; set; }
-        internal Connection InstrumentInfoConnection { get; set; }
+        internal IConnection CommonConnection { get; set; }
+        internal IConnection CandleConnection { get; set; }
+        internal IConnection InstrumentInfoConnection { get; set; }
 
         public ExchangeStatus[] ExchangeStatus { get; private set; }
 
@@ -142,7 +142,7 @@ namespace CoreNgine.Shared
             }
 
             CommonConnection = ConnectionFactory.GetConnection(TiApiToken);
-            CandleConnection = ConnectionFactory.GetConnection(TiApiToken);
+            CandleConnection = ConnectionFactory.GetStreamingConnection(TiApiToken);
             if (Settings.SubscribeInstrumentStatus)
             {
                 InstrumentInfoConnection = ConnectionFactory.GetConnection(TiApiToken);
@@ -218,7 +218,7 @@ namespace CoreNgine.Shared
             }
         }
 
-        public void QueueBrokerAction(Func<Connection, Task> act, string description)
+        public void QueueBrokerAction(Func<IConnection, Task> act, string description)
         {
             var brAct = new BrokerAction(act, description);
             CommonConnectionActions.Enqueue(brAct);
@@ -486,17 +486,12 @@ namespace CoreNgine.Shared
                     }                    
                     stock.TodayOpen = candle.Open;
                     stock.TodayDate = candle.Time.ToLocalTime();
-                    stock.LastUpdatePrice = DateTime.Now;
-                    stock.Price = candle.Close;
-                    if (stock.TodayOpen > 0)
-                        stock.DayChange = (stock.Price - stock.TodayOpen) / stock.TodayOpen;
-                    stock.DayVolume = Math.Truncate(candle.Volume);
-                    if (stock.AvgDayVolumePerMonth > 0)
-                        stock.DayVolChgOfAvg = stock.DayVolume / stock.AvgDayVolumePerMonth;
+                    SetStockPrice(stock, candle);
+                    SetStockVolume(stock, Math.Truncate(candle.Volume));
                     await _mainModel.OnStockUpdated(stock);
                     if (!_subscribedMinuteFigi.Contains(stock.Figi))
                     {
-                        QueueBrokerAction(b => b.SendStreamingRequestAsync(
+                        QueueBrokerAction(b => CandleConnection.SendStreamingRequestAsync(
                                 SubscribeCandle(stock.Figi, CandleInterval.Minute)),
                             $"Подписка на минутную свечу {stock.Ticker} ({stock.Figi})");
                         _subscribedMinuteFigi.Add(stock.Figi);
@@ -510,11 +505,71 @@ namespace CoreNgine.Shared
                             $"Новый день ({stock.Ticker} {stock.TodayDate} -> {candle.Time.Date})");
                         return;
                     }
-                    stock.LastUpdatePrice = DateTime.Now;
+
+                    var accel = (candle.Close - stock.Price) / stock.MinPriceIncrement;
+                    stock.PriceAcc = accel;
+                    SetStockPrice(stock, candle);
+
+                    var newDayVolume = stock.DayVolume + Math.Truncate(candle.Volume);
+                    if (stock.MinuteCandles.TryGetValue(candle.Time.ToLocalTime(), out var prevCandle))
+                        newDayVolume -= Math.Truncate(prevCandle.Volume);
+                    SetStockVolume(stock, newDayVolume);
+                    
                     stock.LogCandle(candle);
+
+                    var candleTimes = stock.MinuteCandles.Keys.OrderBy(t => t).ToArray();
+                    var firstCandleTime = candleTimes[0];
+                    var hourOpenPrice = stock.MinuteCandles[firstCandleTime].Open;
+                    var hourHighPrice = stock.MinuteCandles.Values.Max(mCandle => mCandle.High);
+                    var hourLowPrice = stock.MinuteCandles.Values.Min(mCandle => mCandle.Low);
+                    stock.HourChange = (candle.Close - hourOpenPrice) / hourOpenPrice;
+                    stock.HourMinChange = (hourLowPrice - hourOpenPrice) / hourLowPrice;
+                    stock.HourMaxChange = (hourHighPrice - hourOpenPrice) / hourHighPrice;
+
+                    var m5Candles = candleTimes.TakeLast(5).Select(time => stock.MinuteCandles[time]).ToArray();
+                    var m5OpenPrice = m5Candles[0].Open;
+                    var m5HighPrice = m5Candles.Max(c => c.High);
+                    var m5LowPrice = m5Candles.Min(c => c.Low);
+                    stock.M5Change =  (candle.Close - m5OpenPrice) / m5OpenPrice;
+                    stock.M5MinChange =  (m5LowPrice - m5OpenPrice) / m5LowPrice;
+                    stock.M5MaxChange =  (m5HighPrice - m5OpenPrice) / m5HighPrice;
+
+                    var settings = _settingsProvider.GetSettingsForStock(stock);
+                    if (settings.AccTicks > 0)
+                    {
+                        var accTicks = stock.AccTicks;
+                        accTicks.AddLast(stock.PriceAcc);
+                        while (accTicks.Count > settings.AccTicks)
+                            accTicks.RemoveFirst();
+
+                        stock.PriceAccAvg = GetAvgAcc(accTicks, settings.AccTicks);
+                    }
+                    
                     await _mainModel.OnStockUpdated(stock);
                 }
             }
+        }
+
+        private static decimal GetAvgAcc(LinkedList<decimal> accTicks, int ticksCount)
+        {
+            if (ticksCount <= 0)
+                return 0;
+            return accTicks.TakeLast(ticksCount).Aggregate(0m, (current, next) => current + next) / ticksCount;
+        }
+
+        private static void SetStockVolume(IStockModel stock, decimal volume)
+        {
+            stock.DayVolume = volume;
+            if (stock.AvgDayVolumePerMonth > 0)
+                stock.DayVolChgOfAvg = stock.DayVolume / stock.AvgDayVolumePerMonth;
+        }
+
+        private static void SetStockPrice(IStockModel stock, CandlePayload candle)
+        {
+            stock.Price = candle.Close;
+            if (stock.TodayOpen > 0)
+                stock.DayChange = (stock.Price - stock.TodayOpen) / stock.TodayOpen;
+            stock.LastUpdatePrice = DateTime.Now;
         }
 
         private void Broker_StreamingEventReceived(object sender, StreamingEventReceivedEventArgs e)
@@ -589,9 +644,9 @@ namespace CoreNgine.Shared
             CandleList prices = null;
             try
             {
-                prices = await CommonConnection.Context.MarketCandlesAsync(stock.Figi,
-                    DateTime.Now.Date.AddMonths(-1),
-                    DateTime.Now.Date.AddDays(1), CandleInterval.Day);
+                prices = await CommonConnection.MarketCandlesAsync(stock.Figi,
+                    DateTime.UtcNow.Date.AddMonths(-1),
+                    DateTime.UtcNow.Date.AddDays(1), CandleInterval.Day);
                 stock.LastMonthDataUpdate = DateTime.Now;
             }
             catch
@@ -606,14 +661,13 @@ namespace CoreNgine.Shared
                 avgDayVolumePerMonth = 0, avgDayPricePerMonth = 0, monthOpen = -1,
                 yesterdayVolume = 0, yesterdayMin = 0, yesterdayMax = 0, yesterdayAvgPrice = 0;
 
-            var todayCandle = prices.Candles[prices.Candles.Count-1];
             foreach (var candle in prices.Candles)
             {
                 if (monthOpen == -1)
                     monthOpen = candle.Open;
                 
                 monthLow = monthLow == 0 ? candle.Low : Math.Min(monthLow, candle.Low);
-                monthHigh = monthHigh == 0 ? candle.High : Math.Min(monthHigh, candle.High);
+                monthHigh = monthHigh == 0 ? candle.High : Math.Max(monthHigh, candle.High);
                 monthVolume += candle.Volume;
                 avgDayPricePerMonth += (candle.High + candle.Low) / 2;
                 yesterdayVolume = candle.Volume;
@@ -631,6 +685,7 @@ namespace CoreNgine.Shared
             stock.MonthOpen = monthOpen;
             stock.MonthHigh = monthHigh;
             stock.MonthLow = monthLow;
+            stock.MonthChange = (stock.Price - stock.MonthOpen) / stock.MonthOpen;
             stock.MonthVolume = monthVolume;
             stock.MonthVolumeCost = monthVolume * monthAvgPrice * stock.Lot;
             stock.AvgDayVolumePerMonth = Math.Round(avgDayVolumePerMonth);
@@ -640,6 +695,22 @@ namespace CoreNgine.Shared
             stock.YesterdayAvgPrice = yesterdayAvgPrice;
             stock.YesterdayVolume = yesterdayVolume;
             stock.YesterdayVolumeCost = yesterdayVolume * yesterdayAvgPrice * stock.Lot;
+
+            CandleList yearPrices = null;
+            var startYear = DateTime.UtcNow.Date.AddYears(-1);
+            try
+            {
+                yearPrices = await CommonConnection.MarketCandlesAsync(stock.Figi, startYear, startYear.AddDays(1), CandleInterval.Day);
+            }
+            catch
+            {
+                return false;
+            }
+            
+            if (yearPrices.Candles.Count == 0)
+                return false;
+
+            stock.YearChange = (stock.Price - yearPrices.Candles[0].Open) / yearPrices.Candles[0].Open; 
 
             return true;
         }
@@ -687,9 +758,9 @@ namespace CoreNgine.Shared
         private async Task ReportStatsCheckerProgress()
         {
             var stocks = _mainModel.Stocks
-                .Where(s => !s.Value.IsDead).ToList()  // this shit is maybe more thread-safe 
+                .Where(s => !s.Value.IsDead && Instruments[s.Value.Ticker].IsActive).ToList()  // this shit is maybe more thread-safe 
                 .Select(pair => pair.Value).ToList();
-            var completed = stocks.Count(s => !s.MonthStatsExpired);
+            var completed = stocks.Count(s => !s.MonthStatsExpired && Instruments[s.Ticker].IsActive);
             if (stocks.Count > 0)
                 await EventAggregator.PublishOnCurrentThreadAsync(new StatsUpdateMessage(completed, stocks.Count,
                     completed == stocks.Count, _apiCount));
@@ -732,8 +803,7 @@ namespace CoreNgine.Shared
                     _lastBatchMonthStatsEnqueued = DateTime.Now;
                 }
 
-                if (!_monthStatsQueue.Any())
-                    await Task.Delay(100);
+                await Task.Delay(100);
             }
         }
 
@@ -749,6 +819,7 @@ namespace CoreNgine.Shared
 
         public void CheckSubscription()
         {
+            return;
             foreach (var pair in _mainModel.Stocks)
             {
                 var stock = pair.Value;
@@ -789,13 +860,14 @@ namespace CoreNgine.Shared
 
         public void SubscribeToStockEvents()
         {
+            int c = 0;
             //var toSubscribeInstr = new HashSet<IStockModel>();
             foreach (var pair in _mainModel.Stocks)
             {
                 var stock = pair.Value;
                 if (stock.IsDead)
                     continue;
-
+                
                 if (!_subscribedFigi.Contains(stock.Figi) && Instruments[stock.Ticker].IsActive)
                 {
                     var request = new CandleSubscribeRequest(stock.Figi, CandleInterval.Day);
@@ -848,7 +920,7 @@ namespace CoreNgine.Shared
                 return;
 
             statusCallback?.Invoke("Загрузка инструментов...");
-            var stocks = await CommonConnection.Context.MarketStocksAsync();
+            var stocks = await CommonConnection.MarketStocksAsync();
             var stocksToAdd = new HashSet<IStockModel>();
             var groupOpts = (Settings as SettingsContainer).AssetGroupSettingsByCurrency;
 
@@ -860,14 +932,14 @@ namespace CoreNgine.Shared
 
                 bool ignoreInstr = !iwo.FilterOptions.Value.IsSubscriptionEnabled;
 
-                if (!ignoreInstr && !String.IsNullOrWhiteSpace(Settings.ExcludePattern))
+                if (!ignoreInstr && !String.IsNullOrWhiteSpace(iwo.FilterOptions.Value.ExcludePattern))
                 {
-                    ignoreInstr = Regex.IsMatch(instr.Ticker, Settings.ExcludePattern);
+                    ignoreInstr = Regex.IsMatch(instr.Ticker, iwo.FilterOptions.Value.ExcludePattern);
                 }
 
-                if (!String.IsNullOrWhiteSpace(Settings.IncludePattern))
+                if (!String.IsNullOrWhiteSpace(iwo.FilterOptions.Value.IncludePattern))
                 {
-                    ignoreInstr = !Regex.IsMatch(instr.Ticker, Settings.IncludePattern);
+                    ignoreInstr = !Regex.IsMatch(instr.Ticker, iwo.FilterOptions.Value.IncludePattern);
                 }
 
                 var stock = _mainModel.Stocks.FirstOrDefault(s => s.Value.Figi == instr.Figi).Value;

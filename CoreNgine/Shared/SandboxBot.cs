@@ -40,7 +40,7 @@ namespace CoreNgine.Shared
     {
         private readonly StocksManager _broker;
         private readonly TelegramManager _telegram;
-        private SandboxContext _sandbox;
+        private ISandboxConnection _sandbox;
         private string _accountId;
 
         private ConcurrentDictionary<IStockModel, TradeInfo> Trades { get; } = new ConcurrentDictionary<IStockModel, TradeInfo>();
@@ -61,7 +61,7 @@ namespace CoreNgine.Shared
 
         public async Task Init()
         {
-            _sandbox = ConnectionFactory.GetSandboxConnection(_broker.TiApiToken).Context;
+            _sandbox = ConnectionFactory.GetSandboxConnection(_broker.TiApiToken);
             var account = await _sandbox.RegisterAsync(BrokerAccountType.Tinkoff);
             _accountId = account.BrokerAccountId;
 

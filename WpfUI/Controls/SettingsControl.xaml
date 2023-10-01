@@ -142,6 +142,21 @@
                                                 <TextBlock Grid.Column="3" Margin="2" VerticalAlignment="Center">%</TextBlock>
                                             </Grid>
 
+                                            <TextBlock Text="Среднее ускорение цены T1" Margin="2" />
+                                            
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"></ColumnDefinition>
+                                                    <ColumnDefinition Width="Auto"></ColumnDefinition>
+                                                </Grid.ColumnDefinitions>
+                                                <mah:NumericUpDown
+                                                    Margin="2" Minimum="1" Maximum="120"
+                                                    Value="{Binding AccTicks}"></mah:NumericUpDown>
+                                                <TextBlock Grid.Column="1" Margin="2" VerticalAlignment="Center">тиков.</TextBlock>
+                                            </Grid>
+
+                                            <TextBlock Text="Среднее ускорение цены T2" Margin="2" />
+                                            
                                             <TextBlock Text="Мин. объем при изменении цены &#10; (% от среднего объема за день)" TextWrapping="Wrap" Margin="2" />
                                             <TextBox Text="{Binding MinVolumeDeviationFromDailyAverage, Converter={StaticResource DecimalToPercentConverter}}" Margin="2" />
 

@@ -3,7 +3,6 @@ using System.Text.Json.Serialization;
 
 namespace Tinkoff.Trading.OpenApi.Legacy.Models
 {
-    [JsonConverter(typeof(JsonStringEnumMemberConverter))]
     public enum Currency
     {
         [EnumMember(Value = "RUB")] Rub,
@@ -15,5 +14,6 @@ namespace Tinkoff.Trading.OpenApi.Legacy.Models
         [EnumMember(Value = "JPY")] Jpy,
         [EnumMember(Value = "CNY")] Cny,
         [EnumMember(Value = "TRY")] Try,
+        [EnumMember(Value = "KZT")] Kzt,
     }
 }

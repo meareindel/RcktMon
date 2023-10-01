@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Globalization;
 using Tinkoff.Trading.OpenApi.Legacy.Models;
 
 namespace CoreData.Interfaces
@@ -72,7 +71,22 @@ namespace CoreData.Interfaces
          string AvgDayPricePerMonthF { get; }
          string AvgMonthPriceF { get; }
          decimal? DayVolChgOfAvg { get; set; }
+         decimal MonthChange { get; set; }
+         decimal YearChange { get; set; }
 
+         
+         decimal PriceAcc { get; set; }
+         decimal PriceAccAvg { get; set; }
+         decimal HourMinChange { get; set; }
+         decimal HourChange { get; set; }
+         decimal HourMaxChange { get; set; }
+         decimal M5MinChange { get; set; }
+         decimal M5Change { get; set; }
+         decimal M5MaxChange { get; set; }
+
+         int TicksPerMinute { get; set; }
+         decimal LotPrice { get; }
+         
          DateTime LastMonthDataUpdate { get; set; }
          bool MonthStatsExpired { get; }
 
@@ -81,6 +95,8 @@ namespace CoreData.Interfaces
          IEnumerable<ICandleModel> Candles { get; }
 
          IDictionary<DateTime, CandlePayload> MinuteCandles { get; }
+         
+         LinkedList<decimal> AccTicks { get; }
 
          void AddCandle(CandlePayload candle);
     }

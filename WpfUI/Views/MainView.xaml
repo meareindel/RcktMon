@@ -173,6 +173,18 @@
                                         <DataGridTextColumn Binding="{Binding DayVolChgOfAvg, StringFormat=P2}" Header="% Avg" />
                                         <DataGridTextColumn Binding="{Binding BestBidSpb}" Header="BB TI" />
                                         <DataGridTextColumn Binding="{Binding BestAskSpb}" Header="BA TI" />
+                                        <DataGridTextColumn Binding="{Binding PriceAcc}" Header="Acc" />
+                                        <DataGridTextColumn Binding="{Binding PriceAccAvg}" Header="T Acc Avg" />
+                                        <DataGridTextColumn Binding="{Binding TicksPerMinute}" Header="T/min" />
+                                        <DataGridTextColumn Binding="{Binding LotPrice}" Header="Lot price" />
+                                        <DataGridTextColumn Binding="{Binding M5MinChange, StringFormat=P2}" Header="M5 Min Chg" />
+                                        <DataGridTextColumn Binding="{Binding M5Change, StringFormat=P2}" Header="M5 Chg" />
+                                        <DataGridTextColumn Binding="{Binding M5MaxChange, StringFormat=P2}" Header="M5 Max Chg" />
+                                        <DataGridTextColumn Binding="{Binding HourMinChange, StringFormat=P2}" Header="H Min Chg" />
+                                        <DataGridTextColumn Binding="{Binding HourChange, StringFormat=P2}" Header="H Chg" />
+                                        <DataGridTextColumn Binding="{Binding HourMaxChange, StringFormat=P2}" Header="H Max Chg" />
+                                        <DataGridTextColumn Binding="{Binding MonthChange, StringFormat=P2}" Header="Month Chg" />
+                                        <DataGridTextColumn Binding="{Binding YearChange, StringFormat=P2}" Header="Year Chg" />
                                         <DataGridTextColumn Binding="{Binding Exchange}" Header="EXCHG" />
                                         <DataGridTextColumn Binding="{Binding LimitDown}" Header="DWN LIM" />
                                         <DataGridTextColumn Binding="{Binding LimitUp}" Header="UP LIM" />

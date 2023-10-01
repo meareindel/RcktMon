@@ -48,6 +48,7 @@ namespace CoreData.Settings
         string IncludePattern { get; set; }
         string ExcludePattern { get; set; }
         string ChartUrlTemplate { get; set; }
+        int AccTicks { get; set; }
     }
 
     public interface ISettingsProvider

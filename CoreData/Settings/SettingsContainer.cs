@@ -1,9 +1,6 @@
 ﻿using CoreData.Interfaces;
 using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using CoreCodeGenerators;
 using System.Text.Json.Serialization;
 using System.Runtime.Serialization;
@@ -26,6 +23,7 @@ namespace CoreData.Settings
         public string IncludePattern { get; set; }
         public string ExcludePattern { get; set; }
         public string ChartUrlTemplate { get; set; }
+        public int AccTicks { get; set; }
     }
 
     [Cloneable]
@@ -41,6 +39,7 @@ namespace CoreData.Settings
         public decimal MinXMinutesPriceChange { get; set; }
         public decimal MinVolumeDeviationFromDailyAverage { get; set; }
         public decimal MinXMinutesVolChange { get; set; }
+        public int AccTicks { get; set; }
         public int NumOfMinToCheck { get; set; }
         public int NumOfMinToCheckVol { get; set; }
         public bool IsTelegramEnabled { get; set; }

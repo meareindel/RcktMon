@@ -11,9 +11,14 @@ namespace Tinkoff.Trading.OpenApi.Legacy.Network
         /// <returns>Подключение к бирже.</returns>
         public static Connection GetConnection(string token)
         {
-            return new Connection(token, new HttpClient());
+            return new Connection(token);
         }
 
+        public static Connection GetStreamingConnection(string token)
+        {
+            return new Connection(token, true);
+        }
+        
         /// <summary>
         /// Создаёт объект подключения к OpenAPI в режиме песочницы.
         /// </summary>
@@ -21,7 +26,7 @@ namespace Tinkoff.Trading.OpenApi.Legacy.Network
         /// <returns>Подключение к бирже в режиме песочницы.</returns>
         public static SandboxConnection GetSandboxConnection(string token)
         {
-            return new SandboxConnection(token, new HttpClient());
+            return new SandboxConnection(token);
         }
     }
 }

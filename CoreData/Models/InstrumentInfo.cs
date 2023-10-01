@@ -57,18 +57,7 @@ namespace CoreData.Models
         }
             
 
-        public bool IsActive
-        {
-            get
-            {
-                var currentMsk = CurrentDateMsk;
-
-                return currentMsk >= MarketStartDate 
-                       && currentMsk < MarketEndDate 
-                       && ExchangeStatus == "Open" 
-                       && InstrumentStatus?.StartsWith("Open") == true;
-            }
-        }
+        public bool IsActive => ExchangeStatus == "Open";
 
         public InstrumentInfo(TinkoffStocksInfoCollection.Value payloadValue)
         {

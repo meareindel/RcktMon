@@ -155,6 +155,6 @@ namespace Tinkoff.Trading.OpenApi.Legacy.Network
         /// </summary>
         /// <param name="request">Запрос.</param>
         /// <typeparam name="TRequest">Тип запроса.</typeparam>
-        Task SendStreamingRequestAsync<T>(T request) where T : StreamingRequest;
+        Task SendStreamingRequestAsync(StreamingRequest request);
     }
 }

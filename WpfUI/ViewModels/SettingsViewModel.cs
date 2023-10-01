@@ -28,6 +28,7 @@ namespace RcktMon.ViewModels
         public string IncludePattern { get; set; }
         public string ExcludePattern { get; set; }
         public string ChartUrlTemplate { get; set; }
+        public int AccTicks { get; set; }
     }
 
     public class SettingsViewModel : PropertyChangedBase, INgineSettings

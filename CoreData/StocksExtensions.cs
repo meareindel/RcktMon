@@ -55,7 +55,7 @@ namespace CoreData
             return (@$"
 *{s.Ticker}* {change.Arrow()} {change.FormatPercent()} in {minutes}m ({candles[candles.Length-1].Open.FormatPrice(s.Currency, true),2} → {candles[0].Close.FormatPrice(s.Currency, true), -2}) 🔸 Vol {sumVolume} ({volPercentOfChange.FormatPercent()}), {volPriceF}
 `{s.Ticker}` *({s.Name})* {candles[candles.Length-1].Time.ToLocalTime():ddd, dd.MM.yy, H:mm} → {s.LastUpdatePrice:H:mm:ss}
-{s.DayChange.Arrow()} {s.DayChangeF} today ({s.TodayOpenF} → {s.PriceF}) 🔹 Vol {s.DayVolume} ({volPercentOfDay.FormatPercent()}), {s.DayVolumeCostF}
+{s.DayChange.Arrow()} {s.DayChangeF} today ({s.TodayOpenF} → {s.PriceF}) 🔹 Vol {s.DayVolume.FormatNumber()} ({volPercentOfDay.FormatPercent()}), {s.DayVolumeCostF}
 ❇️ Yesterday AVG {s.YesterdayAvgPriceF} ◽️ Vol {s.YesterdayVolume.FormatNumber()} ({s.YesterdayVolumeCostF})
 ✳️ Month       AVG {s.AvgDayPricePerMonthF} ◽️ Vol {s.AvgDayVolumePerMonth.FormatNumber()} ({s.AvgDayVolumePerMonthCostF})
 ✴️ Month Total Vol {s.MonthVolume.FormatNumber()} ({s.MonthVolumeCostF})
@@ -81,7 +81,7 @@ namespace CoreData
             return (@$"
 *{s.Ticker}* 🔸 *VOL* {volPercentOfChange.FormatPercent()} in {minutes}m ({sumVolume.FormatNumber()} of {s.AvgDayVolumePerMonth.FormatNumber()} AVG) cost {volPriceF}
 `{s.Ticker}` *({s.Name})* {candles[candles.Length-1].Time.ToLocalTime():ddd, dd.MM.yy, H:mm} → {s.LastUpdatePrice:H:mm:ss}
-{change.Arrow()} {change.FormatPercent()} in {minutes}m ({candles[candles.Length-1].Open.FormatPrice(s.Currency),2} → {candles[0].Close.FormatPrice(s.Currency), -2})
+{change.Arrow()} {change.FormatPercent()} in {minutes}m ({candles[candles.Length-1].Open.FormatPrice(s.Currency, true),2} → {candles[0].Close.FormatPrice(s.Currency, true), -2})
 {s.DayChange.Arrow()} {s.DayChangeF} today ({s.TodayOpenF} → {s.PriceF}) 🔹 Vol {s.DayVolume.FormatNumber()} ({volPercentOfDay.FormatPercent()}), {s.DayVolumeCostF}
 ❇️ Yesterday AVG {s.YesterdayAvgPriceF} ◽️ Vol {s.YesterdayVolume.FormatNumber()} ({s.YesterdayVolumeCostF})
 ✳️ Month       AVG {s.AvgDayPricePerMonthF} ◽️ Vol {s.AvgDayVolumePerMonth.FormatNumber()} ({s.AvgDayVolumePerMonthCostF})

@@ -30,6 +30,18 @@
 
     <ItemGroup>
       <PackageReference Include="Macross.Json.Extensions" Version="3.0.0" />
+      <PackageReference Include="Tinkoff.InvestApi" Version="0.6.2" />
+    </ItemGroup>
+
+
+    <ItemGroup>
+      <ProjectReference Include="..\ApiInterface\ApiInterface.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <Compile Remove="Models\Account.cs" />
+      <Compile Remove="Models\BrokerAccountType.cs" />
+      <Compile Remove="Models\ExtendedOperationType.cs" />
     </ItemGroup>
 
 </Project>

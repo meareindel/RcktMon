@@ -45,7 +45,7 @@ namespace Tinkoff.Trading.OpenApi.Legacy.Models
             return new InstrumentInfoUnsubscribeRequest(figi);
         }
 
-        public class CandleSubscribeRequest : StreamingRequest
+        public abstract class BaseCandleRequest : StreamingRequest
         {
             public override string Event => "candle:subscribe";
 
@@ -55,33 +55,30 @@ namespace Tinkoff.Trading.OpenApi.Legacy.Models
             [JsonPropertyName("interval")]
             public CandleInterval Interval { get; }
 
-            public CandleSubscribeRequest(string figi, CandleInterval interval, string requestId = null)
+            public BaseCandleRequest(string figi, CandleInterval interval, string requestId = null)
                 : base(requestId)
             {
                 Figi = figi;
                 Interval = interval;
             }
+            
         }
-
-        public class CandleUnsubscribeRequest : StreamingRequest
+        
+        public class CandleSubscribeRequest : BaseCandleRequest
         {
-            public override string Event => "candle:unsubscribe";
-
-            [JsonPropertyName("figi")]
-            public string Figi { get; }
-
-            [JsonPropertyName("interval")]
-            public CandleInterval Interval { get; }
-
-            public CandleUnsubscribeRequest(string figi, CandleInterval interval, string requestId = null)
-                : base(requestId)
+            public CandleSubscribeRequest(string figi, CandleInterval interval, string requestId = null) : base(figi, interval, requestId)
             {
-                Figi = figi;
-                Interval = interval;
             }
         }
 
-        public class OrderbookSubscribeRequest : StreamingRequest
+        public class CandleUnsubscribeRequest : BaseCandleRequest
+        {
+            public CandleUnsubscribeRequest(string figi, CandleInterval interval, string requestId = null) : base(figi, interval, requestId)
+            {
+            }
+        }
+
+        public abstract class BaseOrderbookRequest : StreamingRequest
         {
             public override string Event => "orderbook:subscribe";
 
@@ -91,57 +88,53 @@ namespace Tinkoff.Trading.OpenApi.Legacy.Models
             [JsonPropertyName("depth")]
             public int Depth { get; }
 
-            public OrderbookSubscribeRequest(string figi, int depth, string requestId = null)
+            public BaseOrderbookRequest(string figi, int depth, string requestId = null)
                 : base(requestId)
             {
                 Figi = figi;
                 Depth = depth;
             }
         }
-
-        public class OrderbookUnsubscribeRequest : StreamingRequest
+        
+        public class OrderbookSubscribeRequest : BaseOrderbookRequest
         {
-            public override string Event => "orderbook:unsubscribe";
-
-            [JsonPropertyName("figi")]
-            public string Figi { get; }
-
-            [JsonPropertyName("depth")]
-            public int Depth { get; }
-
-            public OrderbookUnsubscribeRequest(string figi, int depth, string requestId = null)
-                : base(requestId)
+            public OrderbookSubscribeRequest(string figi, int depth, string requestId = null) : base(figi, depth, requestId)
             {
-                Figi = figi;
-                Depth = depth;
             }
         }
 
-        public class InstrumentInfoSubscribeRequest : StreamingRequest
+        public class OrderbookUnsubscribeRequest : BaseOrderbookRequest
+        {
+            public OrderbookUnsubscribeRequest(string figi, int depth, string requestId = null) : base(figi, depth, requestId)
+            {
+            }
+        }
+
+        public abstract class BaseInstrumentInfoRequest : StreamingRequest
         {
             public override string Event => "instrument_info:subscribe";
 
             [JsonPropertyName("figi")]
             public string Figi { get; }
 
-            public InstrumentInfoSubscribeRequest(string figi, string requestId = null)
+            public BaseInstrumentInfoRequest(string figi, string requestId = null)
                 : base(requestId)
             {
                 Figi = figi;
             }
         }
-
-        public class InstrumentInfoUnsubscribeRequest : StreamingRequest
+        
+        public class InstrumentInfoSubscribeRequest : BaseInstrumentInfoRequest
         {
-            public override string Event => "instrument_info:unsubscribe";
-
-            [JsonPropertyName("figi")]
-            public string Figi { get; }
-
-            public InstrumentInfoUnsubscribeRequest(string figi, string requestId = null)
-                : base(requestId)
+            public InstrumentInfoSubscribeRequest(string figi, string requestId = null) : base(figi, requestId)
             {
-                Figi = figi;
+            }
+        }
+
+        public class InstrumentInfoUnsubscribeRequest : BaseInstrumentInfoRequest
+        {
+            public InstrumentInfoUnsubscribeRequest(string figi, string requestId = null) : base(figi, requestId)
+            {
             }
         }
     }

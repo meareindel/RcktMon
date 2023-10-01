@@ -56,6 +56,8 @@ namespace RcktMon.Helpers
                 MinXMinutesPriceChange = 0.03m;
             if (MinXMinutesVolChange == 0)
                 MinXMinutesVolChange = 0.5m;
+            if (AccTicks == 0)
+                AccTicks = 10;
             if (NumOfMinToCheck == 0)
                 NumOfMinToCheck = 10;
             if (NumOfMinToCheckVol == 0)
@@ -105,9 +107,10 @@ namespace RcktMon.Helpers
                         NumOfMinToCheckVol = NumOfMinToCheckVol,
                         MinVolumeDeviationFromDailyAverage = MinVolumeDeviationFromDailyAverage,
                         MinXMinutesVolChange = MinXMinutesVolChange,
+                        AccTicks = AccTicks,
                         IncludePattern = IncludePattern,
                         ExcludePattern = ExcludePattern,
-                        IsSubscriptionEnabled = true,
+                        IsSubscriptionEnabled = false,
                         IsTelegramEnabled = true
                     };
                     currency.InitValuesAction?.Invoke(groupSettings);

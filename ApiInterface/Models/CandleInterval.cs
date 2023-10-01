@@ -3,7 +3,6 @@ using System.Text.Json.Serialization;
 
 namespace Tinkoff.Trading.OpenApi.Legacy.Models
 {
-    [JsonConverter(typeof(JsonStringEnumMemberConverter))]
     public enum CandleInterval
     {
         [EnumMember(Value = "1min")]

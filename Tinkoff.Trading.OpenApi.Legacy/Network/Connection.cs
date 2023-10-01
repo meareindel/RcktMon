@@ -1,251 +1,602 @@
 using System;
-using System.Buffers;
-using System.IO;
-using System.Net;
-using System.Net.Http;
-using System.Net.Http.Headers;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
 using System.Net.WebSockets;
-using System.Text;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Google.Protobuf.WellKnownTypes;
+using Grpc.Core;
+using Tinkoff.InvestApi;
+using Tinkoff.InvestApi.V1;
+using Tinkoff.Trading.OpenApi.Legacy.Extensions;
 using Tinkoff.Trading.OpenApi.Legacy.Models;
+using Account = Tinkoff.Trading.OpenApi.Legacy.Models.Account;
+using CandleInterval = Tinkoff.Trading.OpenApi.Legacy.Models.CandleInterval;
+using Currency = Tinkoff.Trading.OpenApi.Legacy.Models.Currency;
+using Enum = System.Enum;
+using InstrumentType = Tinkoff.Trading.OpenApi.Legacy.Models.InstrumentType;
+using Operation = Tinkoff.Trading.OpenApi.Legacy.Models.Operation;
+using Order = Tinkoff.Trading.OpenApi.Legacy.Models.Order;
 
 namespace Tinkoff.Trading.OpenApi.Legacy.Network
 {
-    public abstract class Connection<TContext> : IConnection<TContext>, IDisposable
-        where TContext : IContext
+    public class Connection : IConnection
     {
-        private readonly Uri _baseUri;
-        private readonly Uri _webSocketBaseUri;
-        private readonly string _token;
-        private readonly HttpClient _httpClient;
-        private ClientWebSocket _webSocket;
-        private Task _webSocketTask;
+        private readonly InvestApiClient _investClient;
+        private readonly CancellationTokenSource _streamProcessingTaskCts = new CancellationTokenSource();
+        private readonly AsyncDuplexStreamingCall<MarketDataRequest, MarketDataResponse> _stream;
+        private readonly ConcurrentBag<StreamingRequest> _requests = new ConcurrentBag<StreamingRequest>();
+        private readonly ConcurrentDictionary<string, bool> _dayRequests = new ConcurrentDictionary<string, bool>();
 
-        protected Connection(string baseUri, string token, HttpClient httpClient) 
-            : this (baseUri, "wss://api-invest.tinkoff.ru/openapi/md/v1/md-openapi/ws", token, httpClient)
-        {
-        }
-
-        protected Connection(string baseUri, string webSocketBaseUri, string token, HttpClient httpClient)
-        {
-            _baseUri = new Uri(baseUri);
-            _webSocketBaseUri = new Uri(webSocketBaseUri);
-            _token = token;
-            _httpClient = httpClient;
-            _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
-        }
-
-        public Defaults Defaults { get; } = new Defaults();
-        public abstract TContext Context { get; }
-
+        /// <summary>
+        /// Событие, возникающее при получении сообщения от WebSocket-клиента.
+        /// </summary>
         public event EventHandler<StreamingEventReceivedEventArgs> StreamingEventReceived;
+
+        /// <summary>
+        /// Событие, возникающее при ошибке WebSocket-клиента (например, при обрыве связи).
+        /// </summary>
         public event EventHandler<WebSocketException> WebSocketException;
+
+        /// <summary>
+        /// Событие, возникающее при закрытии WebSocket соединения.
+        /// </summary>
         public event EventHandler StreamingClosed;
 
-        public async Task<OpenApiResponse<TPayload>> SendGetRequestAsync<TPayload>(string path)
+        public Connection(string token) : this(token, false, false)
         {
-            var uri = new Uri(_baseUri, path);
-            var response = await _httpClient.GetAsync(uri).ConfigureAwait(false);
-
-            return await HandleResponseAsync<TPayload>(response).ConfigureAwait(false);
+            
+        }
+        
+        public Connection(string token, bool isStreaming) : this(token, false, isStreaming)
+        {
+            
         }
 
-        public async Task<OpenApiResponse<TOut>> SendPostRequestAsync<TIn, TOut>(string path, TIn payload)
+        private static int eventsCounter = 0;
+        
+        protected Connection(string token, bool sandbox, bool isStreaming)
         {
-            var uri = new Uri(_baseUri, path);
-            var request = new HttpRequestMessage(HttpMethod.Post, uri);
-            if (payload != null)
+            _investClient = InvestApiClientFactory.Create(token, sandbox);
+            Task.Factory.StartNew(ProcessDayRequests(), TaskCreationOptions.LongRunning);
+            if (isStreaming)
             {
-                var body = JsonSerializer.Serialize(payload, payload.GetType(), SerializationOptions.Instance);
-                request.Content = new StringContent(body, Encoding.UTF8, "application/json");
-            }
-
-            var response = await _httpClient.SendAsync(request).ConfigureAwait(false);
-
-            return await HandleResponseAsync<TOut>(response).ConfigureAwait(false);
-        }
-
-        public async Task SendStreamingRequestAsync<TRequest>(TRequest request, CancellationToken cancellationToken = default(CancellationToken))
-            where TRequest : StreamingRequest
-        {
-            var socket = _webSocket;
-            await EnsureWebSocketConnectionAsync(cancellationToken).ConfigureAwait(false);
-
-            var requestJson = JsonSerializer.Serialize(request, request.GetType(), SerializationOptions.Instance);
-            var data = Encoding.UTF8.GetBytes(requestJson);
-            var buffer = new ArraySegment<byte>(data);
-
-            if (socket != null && socket.State == WebSocketState.Open)
-                await socket.SendAsync(buffer, WebSocketMessageType.Text, true, cancellationToken)
-                    .ConfigureAwait(false);
-        }
-
-        private static async Task<OpenApiResponse<TOut>> HandleResponseAsync<TOut>(HttpResponseMessage response)
-        {
-            byte[] content = default;
-            int contentLength = 0;
-            var arrayPool = ArrayPool<byte>.Shared;
-            try
-            {
-                if (response.Content?.Headers.ContentLength > 0)
-                {
-                    contentLength = (int) response.Content.Headers.ContentLength;
-                    content = arrayPool.Rent(contentLength);
-                    var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
-                    await stream.ReadAsync(content, 0, contentLength).ConfigureAwait(false);
-                }
-
-                // .NET Standard 2.0 doesn't have too many requests status code
-                // https://github.com/dotnet/runtime/issues/15650#issue-558031319
-                const HttpStatusCode TooManyRequestsStatusCode = (HttpStatusCode) 429;
-                switch (response.StatusCode)
-                {
-                    case HttpStatusCode.OK:
-                        return JsonSerializer.Deserialize<OpenApiResponse<TOut>>(content.AsSpan(0, contentLength),
-                            SerializationOptions.Instance);
-                    case HttpStatusCode.Forbidden:
-                        throw new OpenApiException("You have no access to that resource (token is correct, but not accepted)", HttpStatusCode.Forbidden);
-                    case HttpStatusCode.Unauthorized:
-                        throw new OpenApiException("You have no access to that resource", HttpStatusCode.Unauthorized);
-                    case TooManyRequestsStatusCode:
-                        throw new OpenApiException("Too many requests", TooManyRequestsStatusCode);
-                    default:
-                        var openApiResponse =
-                            JsonSerializer.Deserialize<OpenApiResponse<OpenApiExceptionPayload>>(content.AsSpan(0, contentLength),
-                                SerializationOptions.Instance);
-                        throw new OpenApiException(
-                            openApiResponse.Payload.Message,
-                            openApiResponse.Payload.Code,
-                            openApiResponse.TrackingId,
-                            response.StatusCode);
-                }
-            }
-            catch (OpenApiException)
-            {
-                throw;
-            }
-            catch (Exception e)
-            {
-                throw new OpenApiInvalidResponseException("Unable to handle response",
-                    content == null ? string.Empty : Encoding.UTF8.GetString(content.AsSpan(0, contentLength).ToArray()), e);
-            }
-            finally
-            {
-                if (content != null)
-                {
-                    arrayPool.Return(content);
-                }
+                _stream = _investClient.MarketDataStream.MarketDataStream();
+                Task.Factory.StartNew(ProcessStream(), TaskCreationOptions.LongRunning);
+                Task.Factory.StartNew(ProcessRequests(), TaskCreationOptions.LongRunning);
             }
         }
 
-        private async Task EnsureWebSocketConnectionAsync(CancellationToken cancellationToken)
+        private Func<Task> ProcessDayRequests()
         {
-            if (_webSocket != null) return;
-
-            if (Interlocked.CompareExchange(ref _webSocket, new ClientWebSocket(), null) != null) return;
-
-            _webSocket.Options.SetRequestHeader("Authorization", $"Bearer {_token}");
-            await _webSocket.ConnectAsync(_webSocketBaseUri, cancellationToken).ConfigureAwait(false);
-
-            _webSocketTask = Task.Run(async () =>
+            return async () =>
             {
-                var bufferCapacity = 8192;
-                var transferBuffer = new byte[bufferCapacity];
-                var messageBuffer = new MemoryStream(bufferCapacity);
-                var messageLength = 0;
-                try
+                while (!_streamProcessingTaskCts.IsCancellationRequested)
                 {
-                    while (_webSocket.State == WebSocketState.Open)
+                    foreach (var entry in _dayRequests)
                     {
-                        var buffer = new ArraySegment<byte>(transferBuffer);
-                        var result = await _webSocket.ReceiveAsync(buffer, CancellationToken.None);
-
-                        switch (result.MessageType)
+                        try
                         {
-                            case WebSocketMessageType.Close:
-                                await _webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Ok",
-                                    CancellationToken.None);
-                                StreamingClosed?.Invoke(this, EventArgs.Empty);
-                                return;
-                            case WebSocketMessageType.Text:
-                                if (result.EndOfMessage)
+                            var dayCandles = await MarketCandlesAsync(entry.Key, DateTime.UtcNow.Date, DateTime.UtcNow.Date.AddDays(1), CandleInterval.Day);
+                            if (dayCandles.Candles.Count > 0)
+                            {
+                                var dayCandle = dayCandles.Candles[0];
+                                var dayCandleResponse = new CandleResponse(dayCandle, dayCandle.Time);
+                                StreamingEventReceived?.Invoke(this, new StreamingEventReceivedEventArgs(dayCandleResponse));
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine(DateTime.Now + "- Ошибка при получении дневных свечей: " + ex.Message);
+                        }
+
+                        await Task.Delay(250);
+                    }
+                    await Task.Delay(250);
+                }
+            };
+        }
+
+        private Func<Task> ProcessRequests()
+        {
+            return async () =>
+            {
+                while (!_streamProcessingTaskCts.IsCancellationRequested)
+                {
+                    var requestsToSend = new List<StreamingRequest>();
+                    while (_requests.TryTake(out var request))
+                        requestsToSend.Add(request);
+
+                    if (requestsToSend.Count > 0)
+                    {
+                        var marketDataRequests = requestsToSend.GroupBy(r => r.GetType().Name).Select(ConvertToMarketDataRequest);
+                        foreach (var marketDataRequest in marketDataRequests)
+                        {
+                            try
+                            {
+                                await _stream.RequestStream.WriteAsync(marketDataRequest);
+                            }
+                            catch (RpcException ex)
+                            {
+                                if (ex.StatusCode == StatusCode.Cancelled)
                                 {
-                                    StreamingResponse response;
-
-                                    // We can use buffer directly if we got a message without chunking
-                                    // This is almost always the case
-                                    if (messageLength == 0)
-                                    {
-                                        response = JsonSerializer.Deserialize<StreamingResponse>(
-                                            buffer.Array.AsSpan(0, result.Count),
-                                            SerializationOptions.Instance);
-                                    }
-                                    else
-                                    {
-                                        // ReSharper disable once AssignNullToNotNullAttribute
-                                        messageBuffer.Write(buffer.Array, 0, result.Count);
-                                        messageLength += result.Count;
-
-                                        response = JsonSerializer.Deserialize<StreamingResponse>(
-                                            messageBuffer.GetBuffer().AsSpan(0, messageLength),
-                                            SerializationOptions.Instance);
-
-                                        messageBuffer.Position = 0;
-                                        messageLength = 0;
-                                    }
-
-                                    OnStreamingEvent(response);
+                                    Console.WriteLine(DateTime.Now + " - Ошибка при записи в поток cancelled: " + ex.Message);
                                 }
-                                else
-                                {
-                                    // ReSharper disable once AssignNullToNotNullAttribute
-                                    messageBuffer.Write(buffer.Array, 0, result.Count);
-                                    messageLength += result.Count;
-                                }
-
-
-                                break;
+                                Console.WriteLine(DateTime.Now + " - Ошибка при записи в поток grpc: " + ex.Message);
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine(DateTime.Now + " - Ошибка при записи в поток: " + ex.Message);
+                            }
                         }
                     }
+
+                    await Task.Delay(1000);
                 }
-                catch (WebSocketException e)
-                {
-                    WebSocketException?.Invoke(this, e);
-                }
-                finally
-                {
-                    _webSocket?.Dispose();
-                    _webSocket = null;
-                }
-            });
+            };
         }
 
-        private void OnStreamingEvent(StreamingResponse response)
+        private MarketDataRequest ConvertToMarketDataRequest(IGrouping<string, StreamingRequest> requests)
         {
-            var handler = StreamingEventReceived;
-            handler?.Invoke(this, new StreamingEventReceivedEventArgs(response));
+            var result = new MarketDataRequest();
+            switch (requests.Key)
+            {
+                case nameof(StreamingRequest.CandleSubscribeRequest):
+                    result.SubscribeCandlesRequest = ToSubscribeCandlesRequest(requests.OfType<StreamingRequest.BaseCandleRequest>(), true);
+                    break;
+                case nameof(StreamingRequest.CandleUnsubscribeRequest):
+                    result.SubscribeCandlesRequest = ToSubscribeCandlesRequest(requests.OfType<StreamingRequest.BaseCandleRequest>(), false);
+                    break;
+                case nameof(StreamingRequest.OrderbookSubscribeRequest):
+                    result.SubscribeOrderBookRequest = ToSubscribeOrderbookRequest(requests.OfType<StreamingRequest.BaseOrderbookRequest>(), true);
+                    break;
+                case nameof(StreamingRequest.OrderbookUnsubscribeRequest):
+                    result.SubscribeOrderBookRequest = ToSubscribeOrderbookRequest(requests.OfType<StreamingRequest.BaseOrderbookRequest>(), false);
+                    break;
+            }
+
+            return result;
         }
 
+        private Func<Task> ProcessStream()
+        {
+            return async () =>
+            {
+                var responseStream = _stream.ResponseStream;
+                while (!_streamProcessingTaskCts.IsCancellationRequested)
+                {
+                    try
+                    {
+                        while (await responseStream.MoveNext())
+                        {
+                            var streamingResponse = ConvertToStreamingResponse(responseStream.Current);
+                            if (streamingResponse != null)
+                                StreamingEventReceived?.Invoke(this, new StreamingEventReceivedEventArgs(streamingResponse));
+
+                            _streamProcessingTaskCts.Token.ThrowIfCancellationRequested();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(DateTime.Now + "- Ошибка при обработке сообщений из потока: " + ex.Message);                        
+                    }
+                }
+            };
+        }
+
+        /// <summary>
+        /// Получение брокерских счетов клиента.
+        /// </summary>
+        /// <returns>Список брокерских счетов.</returns>
+        public async Task<IReadOnlyCollection<Account>> AccountsAsync()
+        {
+            var response = await _investClient.Users.GetAccountsAsync();
+            return response.Accounts.Select(ConvertAccount).ToArray();
+        }
+
+        private Account ConvertAccount(InvestApi.V1.Account account)
+        {
+            var type = account.Type == AccountType.TinkoffIis ? BrokerAccountType.TinkoffIis : BrokerAccountType.Tinkoff;
+            return new Account(type, account.Id);
+        }
+
+        /// <summary>
+        /// Получение списка активных заявок.
+        /// </summary>
+        /// <param name="brokerAccountId">Номер счета (по умолчанию - Тинькофф).</param>
+        /// <returns>Список заявок.</returns>
+        public Task<List<Order>> OrdersAsync(string brokerAccountId = null)
+        {
+            throw new NotImplementedException();
+        }
+
+        /// <summary>
+        /// Размещение лимитной заявки.
+        /// </summary>
+        /// <param name="limitOrder">Параметры отправляемой заявки.</param>
+        /// <returns>Параметры размещённой заявки.</returns>
+        public Task<PlacedLimitOrder> PlaceLimitOrderAsync(LimitOrder limitOrder)
+        {
+            throw new NotImplementedException();
+        }
+
+        /// <summary>
+        /// Создание рыночной заявки.
+        /// </summary>
+        /// <param name="marketOrder">Параметры отправляемой заявки.</param>
+        /// <returns>Параметры размещённой заявки.</returns>
+        public Task<PlacedMarketOrder> PlaceMarketOrderAsync(MarketOrder marketOrder)
+        {
+            throw new NotImplementedException();
+        }
+
+        /// <summary>
+        /// Отзыв лимитной заявки.
+        /// </summary>
+        /// <param name="id">Идентификатор заявки.</param>
+        /// <param name="brokerAccountId">Номер счета (по умолчанию - Тинькофф).</param>
+        public Task CancelOrderAsync(string id, string brokerAccountId = null)
+        {
+            throw new NotImplementedException();
+        }
+
+        /// <summary>
+        /// Получение информации по портфелю инструментов.
+        /// </summary>
+        /// <param name="brokerAccountId">Номер счета (по умолчанию - Тинькофф).</param>
+        /// <returns>Портфель инструментов.</returns>
+        public Task<Portfolio> PortfolioAsync(string brokerAccountId = null)
+        {
+            throw new NotImplementedException();
+        }
+
+        /// <summary>
+        /// Получение информации по валютным активам.
+        /// </summary>
+        /// <param name="brokerAccountId">Номер счета (по умолчанию - Тинькофф).</param>
+        /// <returns>Валютные активы.</returns>
+        public Task<PortfolioCurrencies> PortfolioCurrenciesAsync(string brokerAccountId = null)
+        {
+            throw new NotImplementedException();
+        }
+
+        /// <summary>
+        /// Получение списка акций, доступных для торговли.
+        /// </summary>
+        /// <returns>Список акций.</returns>
+        public async Task<MarketInstrumentList> MarketStocksAsync()
+        {
+            var shares = await _investClient.Instruments.SharesAsync();
+            var instruments = shares.Instruments.Select(ConvertShare).ToList();
+            return new MarketInstrumentList(instruments.Count, instruments);
+        }
+
+        private MarketInstrument ConvertShare(Share share)
+        {
+            return new MarketInstrument(share.Figi, share.Ticker, share.Isin, share.MinPriceIncrement.ToDecimal(), share.Lot,
+                Enum.Parse<Currency>(share.Currency, true), share.Name, InstrumentType.Stock);
+        }
+
+        /// <summary>
+        /// Получение списка бондов, доступных для торговли.
+        /// </summary>
+        /// <returns>Список бондов.</returns>
+        public Task<MarketInstrumentList> MarketBondsAsync()
+        {
+            throw new NotImplementedException();
+        }
+
+        /// <summary>
+        /// Получение списка фондов, доступных для торговли.
+        /// </summary>
+        /// <returns>Список фондов.</returns>
+        public Task<MarketInstrumentList> MarketEtfsAsync()
+        {
+            throw new NotImplementedException();
+        }
+
+        /// <summary>
+        /// Получение списка валют, доступных для торговли.
+        /// </summary>
+        /// <returns>Список валют.</returns>
+        public Task<MarketInstrumentList> MarketCurrenciesAsync()
+        {
+            throw new NotImplementedException();
+        }
+
+        /// <summary>
+        /// Поиск инструмента по FIGI.
+        /// </summary>
+        /// <param name="figi">FIGI.</param>
+        /// <returns></returns>
+        public Task<MarketInstrument> MarketSearchByFigiAsync(string figi)
+        {
+            throw new NotImplementedException();
+        }
+
+        /// <summary>
+        /// Поиск инструмента по тикеру.
+        /// </summary>
+        /// <param name="ticker">Тикер.</param>
+        /// <returns></returns>
+        public Task<MarketInstrumentList> MarketSearchByTickerAsync(string ticker)
+        {
+            throw new NotImplementedException();
+        }
+
+        /// <summary>
+        /// Получение исторических значений свечей по FIGI.
+        /// </summary>
+        /// <param name="figi">FIGI.</param>
+        /// <param name="from">Начало временного промежутка.</param>
+        /// <param name="to">Конец временного промежутка.</param>
+        /// <param name="interval">Интервал свечи.</param>
+        /// <returns>Значения свечей.</returns>
+        public async Task<CandleList> MarketCandlesAsync(string figi, DateTime from, DateTime to, CandleInterval interval)
+        {
+            var request = new GetCandlesRequest
+            {
+                Interval = interval.ToInterval(),
+                From = from.ToTimestamp(),
+                To = to.ToTimestamp(),
+                InstrumentId = figi
+            };
+            var response = await _investClient.MarketData.GetCandlesAsync(request);
+            var candles = response.Candles.Select(candle => ConvertCandle(candle, interval, figi)).ToList();
+            return new CandleList(figi, interval, candles);
+        }
+
+        private CandlePayload ConvertCandle(HistoricCandle candle, CandleInterval interval, string figi)
+        {
+            return new CandlePayload(candle.Open.ToDecimal(), candle.Close.ToDecimal(), candle.High.ToDecimal(), candle.Low.ToDecimal(), candle.Volume,
+                candle.Time.ToDateTime(), interval, figi);
+        }
+
+        /// <summary>
+        /// Получение стакана (книги заявок) по FIGI.
+        /// </summary>
+        /// <param name="figi">FIGI.</param>
+        /// <param name="depth">Глубина стакана.</param>
+        /// <returns>Книга заявок.</returns>
+        public Task<Orderbook> MarketOrderbookAsync(string figi, int depth)
+        {
+            throw new NotImplementedException();
+        }
+
+        /// <summary>
+        /// Получение списка операций.
+        /// </summary>
+        /// <param name="from">Начало временного промежутка.</param>
+        /// <param name="to">Конец временного промежутка.</param>
+        /// <param name="figi">FIGI инструмента для фильтрации.</param>
+        /// <param name="brokerAccountId">Номер счета (по умолчанию - Тинькофф).</param>
+        /// <returns>Список операций.</returns>
+        public Task<List<Operation>> OperationsAsync(DateTime from, DateTime to, string figi, string brokerAccountId = null)
+        {
+            throw new NotImplementedException();
+        }
+
+        /// <summary>
+        /// Получение списка операций.
+        /// </summary>
+        /// <param name="from">Начало временного промежутка.</param>
+        /// <param name="interval">Длительность временного промежутка.</param>
+        /// <param name="figi">FIGI инструмента для фильтрации.</param>
+        /// <param name="brokerAccountId">Номер счета (по умолчанию - Тинькофф).</param>
+        /// <returns>Список операций.</returns>
+        public Task<List<Operation>> OperationsAsync(DateTime from, Interval interval, string figi, string brokerAccountId = null)
+        {
+            throw new NotImplementedException();
+        }
+
+        /// <summary>
+        /// Посылает запрос по streaming-протоколу.
+        /// </summary>
+        /// <param name="request">Запрос.</param>
+        public async Task SendStreamingRequestAsync(StreamingRequest request) 
+        {
+            if (request is StreamingRequest.BaseCandleRequest { Interval: CandleInterval.Day } candleRequest)
+            {
+                if (request is StreamingRequest.CandleSubscribeRequest)
+                    _dayRequests[candleRequest.Figi] = true;
+                else
+                    _dayRequests.Remove(candleRequest.Figi, out _);
+
+                return;
+            }
+
+            _requests.Add(request);
+        }
+
+        private MarketDataRequest ConvertToMarketDataRequest(StreamingRequest request)
+        {
+            var result = new MarketDataRequest();
+            switch (request)
+            {
+                case StreamingRequest.BaseCandleRequest candleRequest:
+                    result.SubscribeCandlesRequest = ToSubscribeCandlesRequest(candleRequest);
+                    break;
+                case StreamingRequest.BaseInstrumentInfoRequest instrumentInfoRequest:
+                    result.SubscribeInfoRequest = ToSubscribeInfoRequest(instrumentInfoRequest);
+                    break;
+                case StreamingRequest.BaseOrderbookRequest orderbookRequest:
+                    result.SubscribeOrderBookRequest = ToSubscribeOrderbookRequest(orderbookRequest);
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(request));
+            }
+
+            return result;
+        }
+
+        private SubscribeOrderBookRequest ToSubscribeOrderbookRequest(StreamingRequest.BaseOrderbookRequest orderbookRequest)
+        {
+            return ToSubscribeOrderbookRequest(new[] { orderbookRequest }, orderbookRequest is StreamingRequest.OrderbookSubscribeRequest);
+        }
+
+        private SubscribeOrderBookRequest ToSubscribeOrderbookRequest(IEnumerable<StreamingRequest.BaseOrderbookRequest> requests, bool subscribe)
+        {
+            return new SubscribeOrderBookRequest
+            {
+                Instruments =
+                {
+                    requests.Select(ToOrderBookInstrument).ToArray()
+                },
+                SubscriptionAction = subscribe ? SubscriptionAction.Subscribe : SubscriptionAction.Unsubscribe
+            };
+            
+        }
+
+        private static OrderBookInstrument ToOrderBookInstrument(StreamingRequest.BaseOrderbookRequest orderbookRequest)
+        {
+            var depth = orderbookRequest.Depth switch
+            {
+                < 1 => 1,
+                > 1 and < 10 => 10,
+                > 10 and < 20 => 20,
+                > 20 and < 30 => 30,
+                > 30 and < 40 => 40,
+                > 40 => 50,
+                _ => orderbookRequest.Depth
+            };
+            return new OrderBookInstrument
+            {
+                InstrumentId = orderbookRequest.Figi,
+                Depth = depth
+            };
+        }
+
+        private static SubscribeInfoRequest ToSubscribeInfoRequest(StreamingRequest.BaseInstrumentInfoRequest instrumentInfoRequest)
+        {
+            return new SubscribeInfoRequest
+            {
+                Instruments =
+                {
+                    new InfoInstrument { InstrumentId = instrumentInfoRequest.Figi }
+                },
+                SubscriptionAction = instrumentInfoRequest is StreamingRequest.InstrumentInfoSubscribeRequest
+                    ? SubscriptionAction.Subscribe
+                    : SubscriptionAction.Unsubscribe
+            };
+        }
+
+        private static SubscribeCandlesRequest ToSubscribeCandlesRequest(StreamingRequest.BaseCandleRequest candleRequest)
+        {
+            return ToSubscribeCandlesRequest(new[] { candleRequest }, candleRequest is StreamingRequest.CandleSubscribeRequest);
+        }
+        
+        private static SubscribeCandlesRequest ToSubscribeCandlesRequest(IEnumerable<StreamingRequest.BaseCandleRequest> candleRequests, bool subscribe)
+        {
+            return new SubscribeCandlesRequest
+            {
+                Instruments =
+                {
+                    candleRequests.Select(ToCandleInstrument).ToArray()
+                },
+                SubscriptionAction = subscribe ? SubscriptionAction.Subscribe : SubscriptionAction.Unsubscribe,
+                WaitingClose = false,
+            };
+        }
+
+        private static CandleInstrument ToCandleInstrument(StreamingRequest.BaseCandleRequest candleRequest)
+        {
+            return new CandleInstrument
+            {
+                Interval = candleRequest.Interval.ToSubscriptionInterval(),
+                InstrumentId = candleRequest.Figi
+            };
+        }
+
+        private StreamingResponse ConvertToStreamingResponse(MarketDataResponse response)
+        {
+            return response.PayloadCase switch
+            {
+                MarketDataResponse.PayloadOneofCase.Candle => ToCandleResponse(response),
+                MarketDataResponse.PayloadOneofCase.Orderbook => ToOrderbookResponse(response),
+                // TODO: instrument subscription
+                _ => null
+            };
+        }
+
+        private OrderbookResponse ToOrderbookResponse(MarketDataResponse response)
+        {
+            var orderbook = response.Orderbook;
+            return new OrderbookResponse(new OrderbookPayload(orderbook.Depth, orderbook.Bids.Select(ToDecimals).ToList(),
+                orderbook.Asks.Select(ToDecimals).ToList(), orderbook.Figi), orderbook.Time.ToDateTime());
+        }
+
+        private CandleResponse ToCandleResponse(MarketDataResponse response)
+        {
+            var candle = response.Candle;
+            return new CandleResponse(
+                new CandlePayload(candle.Open.ToDecimal(), candle.Close.ToDecimal(), candle.High.ToDecimal(), candle.Low.ToDecimal(), candle.Volume,
+                    candle.Time.ToDateTime(), candle.Interval.ToLegacyInterval(), candle.Figi), candle.Time.ToDateTime());
+        }
+
+        private decimal[] ToDecimals(InvestApi.V1.Order order)
+        {
+            var result = new decimal[2];
+            result[0] = order.Price.ToDecimal();
+            result[1] = order.Quantity;
+            return result;
+        }
+
+        /// <summary>Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.</summary>
         public void Dispose()
         {
-            _webSocket?.Dispose();
+            _streamProcessingTaskCts.Cancel();
         }
-    }
 
-    public class Connection : Connection<Context>
-    {
-        public Connection(string token, HttpClient httpClient)
-            : base("https://api-invest.tinkoff.ru/openapi/", token, httpClient)
+        /// <summary>
+        /// Регистрация в песочнице.
+        /// </summary>
+        /// <param name="brokerAccountType">
+        /// Тип счета.
+        /// </param>
+        public Task<SandboxAccount> RegisterAsync(BrokerAccountType? brokerAccountType)
         {
+            throw new NotImplementedException();
         }
 
-        public Connection(string baseUri, string webSocketBaseUri, string token, HttpClient httpClient)
-            : base(baseUri, webSocketBaseUri, token, httpClient)
+        /// <summary>
+        /// Установка значения валютного актива.
+        /// </summary>
+        /// <param name="currency">Валюта.</param>
+        /// <param name="balance">Желаемое значение.</param>
+        /// <param name="brokerAccountId">Номер счета (по умолчанию - Тинькофф).</param>
+        public Task SetCurrencyBalanceAsync(Currency currency, decimal balance, string brokerAccountId = null)
         {
+            throw new NotImplementedException();
         }
 
-        public override Context Context => new Context(this);
+        /// <summary>
+        /// Установка позиции по инструменту.
+        /// </summary>
+        /// <param name="figi">FIGI.</param>
+        /// <param name="balance">Желаемое значение.</param>
+        /// <param name="brokerAccountId">Номер счета (по умолчанию - Тинькофф).</param>
+        public Task SetPositionBalanceAsync(string figi, decimal balance, string brokerAccountId = null)
+        {
+            throw new NotImplementedException();
+        }
+
+        /// <summary>
+        /// Удаление счета клиента.
+        /// </summary>
+        /// <param name="brokerAccountId">Номер счета (по умолчанию - Тинькофф).</param>
+        public Task RemoveAsync(string brokerAccountId = null)
+        {
+            throw new NotImplementedException();
+        }
+
+        /// <summary>
+        /// Сброс всех установленных значений по активам.
+        /// </summary>
+        /// <param name="brokerAccountId">Номер счета (по умолчанию - Тинькофф).</param>
+        public Task ClearAsync(string brokerAccountId = null)
+        {
+            throw new NotImplementedException();
+        }
     }
 }

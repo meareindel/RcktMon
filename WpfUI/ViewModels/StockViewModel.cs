@@ -60,18 +60,30 @@ namespace RcktMon.ViewModels
         public decimal MonthLow { get; set; }
         public decimal MonthHigh { get; set; }
         public decimal MonthAvg => (MonthHigh + MonthLow) / 2;
+        public decimal MonthChange { get; set; }
         public decimal MonthVolume { get; set; }
         public decimal MonthVolumeCost { get; set; }
         public decimal AvgDayVolumePerMonth { get; set; }
         public decimal? DayVolChgOfAvg { get; set; }
+        public decimal YearChange { get; set; }
+        public decimal PriceAcc { get; set; }
+        public decimal PriceAccAvg { get; set; }
+        public decimal HourMinChange { get; set; }
+        public decimal HourChange { get; set; }
+        public decimal HourMaxChange { get; set; }
+        public decimal M5MinChange { get; set; }
+        public decimal M5Change { get; set; }
+        public decimal M5MaxChange { get; set; }
+        public int TicksPerMinute { get; set; }
+        public decimal LotPrice => Math.Round(Price * Lot, 2);
         public decimal AvgDayPricePerMonth { get; set; }
         public decimal AvgDayVolumePerMonthCost { get; set; }
         public decimal YesterdayVolume { get; set; }
         public decimal YesterdayVolumeCost { get; set; }
         public decimal YesterdayAvgPrice { get; set; }
 
-        public string TodayOpenF => TodayOpen.FormatPrice(Currency);
-        public string PriceF => Price.FormatPrice(Currency);
+        public string TodayOpenF => TodayOpen.FormatPrice(Currency, true);
+        public string PriceF => Price.FormatPrice(Currency, true);
         public string AvgPriceF => AvgPrice.FormatPrice(Currency);
         public string YesterdayVolumeCostF => YesterdayVolumeCost.FormatPrice(Currency);
         public string YesterdayAvgPriceF => YesterdayAvgPrice.FormatPrice(Currency);
@@ -87,14 +99,24 @@ namespace RcktMon.ViewModels
         public IDictionary<DateTime, CandlePayload> MinuteCandles { get; } =
             new ConcurrentDictionary<DateTime, CandlePayload>();
 
+        public LinkedList<decimal> AccTicks { get; } = new LinkedList<decimal>();
+
+        private LinkedList<DateTime> _tickTimes = new LinkedList<DateTime>();
+
         public void LogCandle(CandlePayload candle)
         {
             MinuteCandles[candle.Time.ToLocalTime()] = candle;
-            if (MinuteCandles.Count > 100)
+            if (MinuteCandles.Count > 60)
             {
-                MinuteCandles.OrderBy(p => p.Key).Take(50).ToList()
-                    .ForEach(p => MinuteCandles.Remove(p.Key, out _));
+                var firstCandleTime = MinuteCandles.MinBy(p => p.Key);
+                MinuteCandles.Remove(firstCandleTime);
             }
+
+            var currentTime = DateTime.Now;
+            _tickTimes.AddLast(currentTime);
+            while ((currentTime - _tickTimes.First.Value).TotalMinutes > 1)
+                _tickTimes.RemoveFirst();
+            TicksPerMinute = _tickTimes.Count;
         }
 
         public IEnumerable<ICandleModel> Candles => _candles ??= new HashSet<ICandleModel>();
