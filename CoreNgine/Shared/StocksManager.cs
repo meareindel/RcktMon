@@ -521,19 +521,11 @@ namespace CoreNgine.Shared
                     var candleTimes = stock.MinuteCandles.Keys.OrderBy(t => t).ToArray();
                     var firstCandleTime = candleTimes[0];
                     var hourOpenPrice = stock.MinuteCandles[firstCandleTime].Open;
-                    var hourHighPrice = stock.MinuteCandles.Values.Max(mCandle => mCandle.High);
-                    var hourLowPrice = stock.MinuteCandles.Values.Min(mCandle => mCandle.Low);
                     stock.HourChange = (candle.Close - hourOpenPrice) / hourOpenPrice;
-                    stock.HourMinChange = (hourLowPrice - hourOpenPrice) / hourLowPrice;
-                    stock.HourMaxChange = (hourHighPrice - hourOpenPrice) / hourHighPrice;
 
                     var m5Candles = candleTimes.TakeLast(5).Select(time => stock.MinuteCandles[time]).ToArray();
                     var m5OpenPrice = m5Candles[0].Open;
-                    var m5HighPrice = m5Candles.Max(c => c.High);
-                    var m5LowPrice = m5Candles.Min(c => c.Low);
                     stock.M5Change =  (candle.Close - m5OpenPrice) / m5OpenPrice;
-                    stock.M5MinChange =  (m5LowPrice - m5OpenPrice) / m5LowPrice;
-                    stock.M5MaxChange =  (m5HighPrice - m5OpenPrice) / m5HighPrice;
 
                     var settings = _settingsProvider.GetSettingsForStock(stock);
                     if (settings.AccTicks > 0)

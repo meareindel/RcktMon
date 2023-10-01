@@ -77,12 +77,8 @@ namespace CoreData.Interfaces
          
          decimal PriceAcc { get; set; }
          decimal PriceAccAvg { get; set; }
-         decimal HourMinChange { get; set; }
          decimal HourChange { get; set; }
-         decimal HourMaxChange { get; set; }
-         decimal M5MinChange { get; set; }
          decimal M5Change { get; set; }
-         decimal M5MaxChange { get; set; }
 
          int TicksPerMinute { get; set; }
          decimal LotPrice { get; }
