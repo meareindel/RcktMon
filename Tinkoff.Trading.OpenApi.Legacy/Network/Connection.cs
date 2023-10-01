@@ -29,20 +29,13 @@ namespace Tinkoff.Trading.OpenApi.Legacy.Network
         private readonly ConcurrentBag<StreamingRequest> _requests = new ConcurrentBag<StreamingRequest>();
         private readonly ConcurrentDictionary<string, bool> _dayRequests = new ConcurrentDictionary<string, bool>();
 
+        private DateTime _lastUnsuccessfulStreamReadTime;
+        private DateTime _lastSuccessfulStreamReadTime;
+
         /// <summary>
         /// Событие, возникающее при получении сообщения от WebSocket-клиента.
         /// </summary>
         public event EventHandler<StreamingEventReceivedEventArgs> StreamingEventReceived;
-
-        /// <summary>
-        /// Событие, возникающее при ошибке WebSocket-клиента (например, при обрыве связи).
-        /// </summary>
-        public event EventHandler<WebSocketException> WebSocketException;
-
-        /// <summary>
-        /// Событие, возникающее при закрытии WebSocket соединения.
-        /// </summary>
-        public event EventHandler StreamingClosed;
 
         public Connection(string token) : this(token, false, false)
         {
@@ -54,8 +47,6 @@ namespace Tinkoff.Trading.OpenApi.Legacy.Network
             
         }
 
-        private static int eventsCounter = 0;
-        
         protected Connection(string token, bool sandbox, bool isStreaming)
         {
             _investClient = InvestApiClientFactory.Create(token, sandbox);
@@ -78,11 +69,15 @@ namespace Tinkoff.Trading.OpenApi.Legacy.Network
                     {
                         try
                         {
-                            var dayCandles = await MarketCandlesAsync(entry.Key, DateTime.UtcNow.Date, DateTime.UtcNow.Date.AddDays(1), CandleInterval.Day);
-                            if (dayCandles.Candles.Count > 0)
+                            // с запасом, за неделю, чтобы взять в качестве цены открытия цену предыдущего закрытия
+                            var dayCandles = await MarketCandlesAsync(entry.Key, DateTime.UtcNow.Date.AddDays(-7), DateTime.UtcNow.Date.AddDays(1), CandleInterval.Day);
+                            if (dayCandles.Candles.Count > 1 && dayCandles.Candles[^1].Time.Date == DateTime.UtcNow.Date)
                             {
-                                var dayCandle = dayCandles.Candles[0];
-                                var dayCandleResponse = new CandleResponse(dayCandle, dayCandle.Time);
+                                var dayCandle = dayCandles.Candles[^1];
+                                var prevClose = dayCandles.Candles[^2].Close;
+                                var resultCandle = new CandlePayload(prevClose, dayCandle.Close, dayCandle.High, dayCandle.Low, dayCandle.Volume,
+                                    dayCandle.Time, dayCandle.Interval, dayCandle.Figi);
+                                var dayCandleResponse = new CandleResponse(resultCandle, dayCandle.Time);
                                 StreamingEventReceived?.Invoke(this, new StreamingEventReceivedEventArgs(dayCandleResponse));
                             }
                         }
@@ -175,11 +170,13 @@ namespace Tinkoff.Trading.OpenApi.Legacy.Network
                                 StreamingEventReceived?.Invoke(this, new StreamingEventReceivedEventArgs(streamingResponse));
 
                             _streamProcessingTaskCts.Token.ThrowIfCancellationRequested();
+                            _lastSuccessfulStreamReadTime = DateTime.Now;
                         }
                     }
                     catch (Exception ex)
                     {
                         Console.WriteLine(DateTime.Now + "- Ошибка при обработке сообщений из потока: " + ex.Message);                        
+                        _lastUnsuccessfulStreamReadTime = DateTime.Now;
                     }
                 }
             };
@@ -409,32 +406,6 @@ namespace Tinkoff.Trading.OpenApi.Legacy.Network
             _requests.Add(request);
         }
 
-        private MarketDataRequest ConvertToMarketDataRequest(StreamingRequest request)
-        {
-            var result = new MarketDataRequest();
-            switch (request)
-            {
-                case StreamingRequest.BaseCandleRequest candleRequest:
-                    result.SubscribeCandlesRequest = ToSubscribeCandlesRequest(candleRequest);
-                    break;
-                case StreamingRequest.BaseInstrumentInfoRequest instrumentInfoRequest:
-                    result.SubscribeInfoRequest = ToSubscribeInfoRequest(instrumentInfoRequest);
-                    break;
-                case StreamingRequest.BaseOrderbookRequest orderbookRequest:
-                    result.SubscribeOrderBookRequest = ToSubscribeOrderbookRequest(orderbookRequest);
-                    break;
-                default:
-                    throw new ArgumentOutOfRangeException(nameof(request));
-            }
-
-            return result;
-        }
-
-        private SubscribeOrderBookRequest ToSubscribeOrderbookRequest(StreamingRequest.BaseOrderbookRequest orderbookRequest)
-        {
-            return ToSubscribeOrderbookRequest(new[] { orderbookRequest }, orderbookRequest is StreamingRequest.OrderbookSubscribeRequest);
-        }
-
         private SubscribeOrderBookRequest ToSubscribeOrderbookRequest(IEnumerable<StreamingRequest.BaseOrderbookRequest> requests, bool subscribe)
         {
             return new SubscribeOrderBookRequest
@@ -467,25 +438,6 @@ namespace Tinkoff.Trading.OpenApi.Legacy.Network
             };
         }
 
-        private static SubscribeInfoRequest ToSubscribeInfoRequest(StreamingRequest.BaseInstrumentInfoRequest instrumentInfoRequest)
-        {
-            return new SubscribeInfoRequest
-            {
-                Instruments =
-                {
-                    new InfoInstrument { InstrumentId = instrumentInfoRequest.Figi }
-                },
-                SubscriptionAction = instrumentInfoRequest is StreamingRequest.InstrumentInfoSubscribeRequest
-                    ? SubscriptionAction.Subscribe
-                    : SubscriptionAction.Unsubscribe
-            };
-        }
-
-        private static SubscribeCandlesRequest ToSubscribeCandlesRequest(StreamingRequest.BaseCandleRequest candleRequest)
-        {
-            return ToSubscribeCandlesRequest(new[] { candleRequest }, candleRequest is StreamingRequest.CandleSubscribeRequest);
-        }
-        
         private static SubscribeCandlesRequest ToSubscribeCandlesRequest(IEnumerable<StreamingRequest.BaseCandleRequest> candleRequests, bool subscribe)
         {
             return new SubscribeCandlesRequest
@@ -598,5 +550,11 @@ namespace Tinkoff.Trading.OpenApi.Legacy.Network
         {
             throw new NotImplementedException();
         }
+
+        /// <summary>
+        /// Состояние соединения (установлено или нет).
+        /// </summary>
+        public bool IsAlive => (DateTime.Now - _lastSuccessfulStreamReadTime).TotalMinutes < 1
+                               || (DateTime.Now - _lastUnsuccessfulStreamReadTime).TotalMinutes > 1;
     }
 }

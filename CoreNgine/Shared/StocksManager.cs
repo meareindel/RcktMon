@@ -142,14 +142,15 @@ namespace CoreNgine.Shared
             }
 
             CommonConnection = ConnectionFactory.GetConnection(TiApiToken);
+            CommonConnection.StreamingEventReceived += Broker_StreamingEventReceived;
             CandleConnection = ConnectionFactory.GetStreamingConnection(TiApiToken);
+            CandleConnection.StreamingEventReceived += Broker_StreamingEventReceived;
+
             if (Settings.SubscribeInstrumentStatus)
             {
                 InstrumentInfoConnection = ConnectionFactory.GetConnection(TiApiToken);
                 InstrumentInfoConnection.StreamingEventReceived += Broker_StreamingEventReceived;
             }                
-            CandleConnection.StreamingEventReceived += Broker_StreamingEventReceived;
-            CommonConnection.StreamingEventReceived += Broker_StreamingEventReceived;
 
             RunMonthUpdateTaskIfNotRunning();
             _lastRestartTime = DateTime.Now;
@@ -819,43 +820,8 @@ namespace CoreNgine.Shared
 
         public void CheckSubscription()
         {
-            return;
-            foreach (var pair in _mainModel.Stocks)
-            {
-                var stock = pair.Value;
-                if ( (stock.LastUpdatePrice.Elapsed().TotalMinutes > 1 || stock.LastUpdateOrderbook.Elapsed().TotalMinutes > 1) && Instruments[stock.Ticker].IsActive )
-                {
-                    stock.LastResubscribeAttempt = DateTime.Now;
-                    if ( _subscribedFigi.Contains( stock.Figi ) )
-                    {
-                        var request = new CandleUnsubscribeRequest(stock.Figi, CandleInterval.Day);
-                        QueueBrokerAction(b => b.SendStreamingRequestAsync(request),
-                            $"Отписка от дневной свечи {stock.Ticker} ({stock.Figi})");
-
-                        var request2 = new OrderbookUnsubscribeRequest(stock.Figi, 5);
-                        QueueBrokerAction(b => CandleConnection.SendStreamingRequestAsync(request2),
-                            $"Отписка от стакана {stock.Ticker} ({stock.Figi}");
-
-                        if (Settings.SubscribeInstrumentStatus)
-                        {
-                            var request3 = new InstrumentInfoUnsubscribeRequest( stock.Figi );
-                            QueueBrokerAction( b => InstrumentInfoConnection.SendStreamingRequestAsync( request3 ),
-                                $"Отписка от статуса {stock.Ticker} ({stock.Figi}" );
-                        }
-
-                        _subscribedFigi.TryRemove(stock.Figi);
-                    }
-                    if (_subscribedMinuteFigi.Contains( stock.Figi ) )
-                    {
-                        QueueBrokerAction(b => b.SendStreamingRequestAsync(
-                                    UnsubscribeCandle(stock.Figi, CandleInterval.Minute)),
-                                $"Отписка от минутной свечи {stock.Ticker} ({stock.Figi})");
-
-                        _subscribedMinuteFigi.TryRemove(stock.Figi);
-                    }
-                }
-            }
-            SubscribeToStockEvents();
+            if (!CandleConnection.IsAlive)
+                ResetConnection("Проблемы с соединением");
         }
 
         public void SubscribeToStockEvents()
@@ -874,9 +840,9 @@ namespace CoreNgine.Shared
                     QueueBrokerAction(b => b.SendStreamingRequestAsync(request),
                         $"Подписка на дневную свечу {stock.Ticker} ({stock.Figi})");
 
-                    var request2 = new OrderbookSubscribeRequest(stock.Figi, 5);
+                    /*var request2 = new OrderbookSubscribeRequest(stock.Figi, 50);
                     QueueBrokerAction(b => CandleConnection.SendStreamingRequestAsync(request2),
-                        $"Подписка на стакан {stock.Ticker} ({stock.Figi}");
+                        $"Подписка на стакан {stock.Ticker} ({stock.Figi}");*/
 
                     if (Settings.SubscribeInstrumentStatus)
                     {
