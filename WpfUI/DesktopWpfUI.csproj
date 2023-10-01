@@ -7,10 +7,10 @@
     <RootNamespace>RcktMon</RootNamespace>
     <EnableDefaultItems>False</EnableDefaultItems>
     <ApplicationIcon>iconfinder_rocket_406798.ico</ApplicationIcon>
-    <AssemblyVersion>1.6.0.0</AssemblyVersion>
-    <FileVersion>1.6.0.0</FileVersion>
+    <AssemblyVersion>1.7.0.0</AssemblyVersion>
+    <FileVersion>1.7.0.0</FileVersion>
     <AssemblyName>RcktMon</AssemblyName>
-    <Version>1.6.6</Version>
+    <Version>1.7.0</Version>
     <TargetFramework>net6.0-windows</TargetFramework>
   </PropertyGroup>
 

@@ -57,8 +57,13 @@ namespace RcktMon.Views
                         {
                             if (col.ActualWidth != colSettings.ColumnWidth)
                                 col.Width = new DataGridLength(colSettings.ColumnWidth);
-                            if (col.DisplayIndex != colSettings.DisplayIndex)
-                                col.DisplayIndex = colSettings.DisplayIndex;
+                            var savedIndex = colSettings.DisplayIndex;
+                            if (col.DisplayIndex != savedIndex)
+                            {
+                                if (savedIndex >= dg.Columns.Count)
+                                    savedIndex = dg.Columns.Count - 1;
+                                col.DisplayIndex = savedIndex;
+                            }
                         }
                     }
                 }
